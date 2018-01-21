@@ -282,10 +282,11 @@ int configure_coords(struct places_s *places) {
     w = COLS - 8;
   }
 
-  pi = (ITEM **)calloc(places->n, sizeof(ITEM *));
+  pi = (ITEM **)calloc(places->n + 1, sizeof(ITEM *));
   for (i = 0; i < places->n; ++i) {
     pi[i] = new_item(places->a[i].address, NULL);
   }
+  pi[places->n] = NULL;
 
   pw = derwin(stdscr, 4 + places->n, w, 2, COLS / 2 - w / 2);
   keypad(pw, TRUE);
