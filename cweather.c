@@ -19,7 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <curl/curl.h>
 #include <jansson.h>
@@ -57,11 +60,11 @@ const char ICON_RAINING[] =
     "    . , . , . , .\n";
 
 const char ICON_SUNNY[] =
-    "    \\   ___  /\n"
+    "     \\  ___  /\n"
     "      /     \\\n"
     "   - |       | -\n"
-    "      \\ ___ /  -\n"
-    "    /  ,  .  \\\n";
+    "      \\ ___ / .\n"
+    "     / ,  .  \\\n";
 
 const char ICON_CLEAR[] =
     "      ___\n"
@@ -75,6 +78,47 @@ const char ICON_PARTLYCLOUDY[] =
     "    - |...|         |\n"
     "     , \\___\\   __  /\n"
     "      / |   --/  \\\n";
+
+struct icon_s {
+  const char *phrase, *day, *night;
+};
+
+struct icon_s icons[] = {
+    {"Tropical Storm", ICON_LIGHTNING, ICON_LIGHTNING},
+    {"Thunder and Hail", ICON_LIGHTNING, ICON_LIGHTNING},
+    {"Rain to Snow Showers", ICON_RAINING, ICON_RAINING},
+    {"Rain / Sleet", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Wintry Mix Snow / Sleet", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Freezing Drizzle", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Drizzle", ICON_RAINING, ICON_RAINING},
+    {"Freezing Rain", ICON_RAINING, ICON_RAINING},
+    {"Light Rain", ICON_RAINING, ICON_RAINING},
+    {"Rain", ICON_RAINING, ICON_RAINING},
+    {"Scattered Flurries", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Light Snow", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Blowing / Drifting Snow", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Snow", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Hail", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Sleet", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Blowing Dust / Sandstorm", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Foggy", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Haze / Windy", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Smoke / Windy", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Blowing Spray / Windy", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Frigid / Ice Crystals", ICON_UNKNOWN, ICON_UNKNOWN},
+    {"Cloudy", ICON_CLOUDY, ICON_CLOUDY},
+    {"Mostly Cloudy", ICON_PARTLYCLOUDY, ICON_PARTLYCLOUDY},
+    {"Partly Cloudy", ICON_PARTLYCLOUDY, ICON_PARTLYCLOUDY},
+    {"Clear", ICON_CLEAR, ICON_CLEAR},
+    {"Sunny", ICON_SUNNY, ICON_SUNNY},
+    {"Fair / Mostly Clear", ICON_CLEAR, ICON_CLEAR},
+    {"Fair / Mostly Sunny", ICON_SUNNY, ICON_SUNNY},
+    {"Thunderstorms", ICON_LIGHTNING, ICON_LIGHTNING},
+    {"Heavy Rain", ICON_RAINING, ICON_RAINING},
+    {"Heavy Snow", ICON_RAINING, ICON_RAINING},
+    {"Scattered Thunderstorms", ICON_LIGHTNING, ICON_LIGHTNING},
+    {NULL, NULL},
+};
 
 struct buf_s {
   size_t cap, len;
@@ -113,229 +157,6 @@ int fetch_json(char *url, struct buf_s *buf) {
   return 0;
 }
 
-void read_iso8601(const char *s, int n, struct tm *t) {
-  strptime(s, "%FT%T%z", t);
-}
-
-struct place_s {
-  char id[65], address[200], timezone[50];
-  double latitude, longitude;
-};
-
-struct places_s {
-  int n, c, ready;
-  struct place_s a[10];
-};
-
-#define READ_PLACE_S_STRING(JN, FN)                      \
-  e = json_object_get(o, JN);                            \
-  if (!e || !json_is_array(e)) {                         \
-    fprintf(stderr, JN "was not an array\n");            \
-    json_decref(r);                                      \
-    return -1;                                           \
-  }                                                      \
-                                                         \
-  for (i = 0; i < places->n; i++) {                      \
-    v = json_array_get(e, i);                            \
-    if (!v || !json_is_string(v)) {                      \
-      fprintf(stderr, JN " element was not a string\n"); \
-      json_decref(r);                                    \
-      return -1;                                         \
-    }                                                    \
-                                                         \
-    s = json_string_value(v);                            \
-    l = json_string_length(v);                           \
-                                                         \
-    strncpy(places->a[i].FN, s, l);                      \
-  }
-
-#define READ_PLACE_S_DOUBLE(JN, FN)                      \
-  e = json_object_get(o, JN);                            \
-  if (!e || !json_is_array(e)) {                         \
-    fprintf(stderr, JN "was not an array\n");            \
-    json_decref(r);                                      \
-    return -1;                                           \
-  }                                                      \
-                                                         \
-  for (i = 0; i < places->n; i++) {                      \
-    v = json_array_get(e, i);                            \
-    if (!v || !json_is_number(v)) {                      \
-      fprintf(stderr, JN " element was not a number\n"); \
-      json_decref(r);                                    \
-      return -1;                                         \
-    }                                                    \
-                                                         \
-    places->a[i].FN = json_number_value(v);              \
-  }
-
-int fetch_coords(struct places_s *places) {
-  int i, rc;
-  struct buf_s b;
-  char url[250], data[1024 * 32];
-  json_t *r, *o, *e, *v;
-  json_error_t err;
-  const char *s;
-  size_t l;
-
-  memset(url, 0, sizeof(url));
-  memset(data, 0, sizeof(data));
-
-  b.cap = 1024 * 32;
-  b.len = 0;
-  b.data = data;
-
-  sprintf(
-      url,
-      "https://api.weather.com/v3/location/"
-      "search?apiKey=d522aa97197fd864d36b418f39ebb323&format=json&language=en-"
-      "AU&locationType=locale&query=Melbourne");
-
-  if ((rc = fetch_json(url, &b)) != 0) {
-    return rc;
-  }
-
-  r = json_loads(b.data, 0, &err);
-
-  if (!r || !json_is_object(r)) {
-    fprintf(stderr, "payload was not an object\n");
-    json_decref(r);
-    return -1;
-  }
-
-  o = json_object_get(r, "location");
-  if (!o || !json_is_object(o)) {
-    fprintf(stderr, "location was not an object\n");
-    json_decref(r);
-    return -1;
-  }
-
-  memset(places, 0, sizeof(struct places_s));
-
-  places->c = 0;
-
-  places->n = json_array_size(json_object_get(o, "placeId"));
-  if (places->n > 10) {
-    places->n = 10;
-  }
-
-  READ_PLACE_S_STRING("placeId", id)
-  READ_PLACE_S_STRING("address", address)
-  READ_PLACE_S_STRING("ianaTimeZone", timezone)
-  READ_PLACE_S_DOUBLE("latitude", latitude)
-  READ_PLACE_S_DOUBLE("longitude", longitude)
-
-  places->ready = 1;
-
-  json_decref(r);
-
-  return 0;
-}
-
-void print_in_middle(WINDOW *w, int sy, int sx, int dw, char *s, chtype c) {
-  int l, x, y;
-  float t;
-
-  if (w == NULL) {
-    w = stdscr;
-  }
-
-  getyx(w, y, x);
-  if (sx != 0) {
-    x = sx;
-  }
-  if (sy != 0) {
-    y = sy;
-  }
-
-  if (dw == 0) {
-    dw = 80;
-  }
-
-  l = strlen(s);
-  t = (dw - l) / 2;
-  x = sx + (int)t;
-  wattron(w, c);
-  mvwprintw(w, y, x, "%s", s);
-  wattroff(w, c);
-  wrefresh(w);
-}
-
-int configure_coords(struct places_s *places) {
-  int i, c, rc, w, l;
-  WINDOW *pw;
-  MENU *pm;
-  ITEM **pi;
-
-  if ((rc = fetch_coords(places)) != 0) {
-    return rc;
-  }
-
-  w = 0;
-  for (i = 0; i < places->n; i++) {
-    // 2 for the border, 2 for the menu indicator, 1 for padding
-    if ((l = strlen(places->a[i].address) + 2 + 2 + 1) > w) {
-      w = l;
-    }
-  }
-
-  if (w > COLS - 8) {
-    w = COLS - 8;
-  }
-
-  pi = (ITEM **)calloc(places->n + 1, sizeof(ITEM *));
-  for (i = 0; i < places->n; ++i) {
-    pi[i] = new_item(places->a[i].address, NULL);
-  }
-  pi[places->n] = NULL;
-
-  pw = derwin(stdscr, 4 + places->n, w, 2, COLS / 2 - w / 2);
-  keypad(pw, TRUE);
-
-  pm = new_menu((ITEM **)pi);
-
-  set_menu_win(pm, pw);
-  set_menu_sub(pm, derwin(pw, places->n, w - 2, 3, 1));
-  set_menu_mark(pm, "* ");
-
-  box(pw, 0, 0);
-  print_in_middle(pw, 1, 0, w, "Choose your location", COLOR_PAIR(1));
-  mvwaddch(pw, 2, 0, ACS_LTEE);
-  mvwhline(pw, 2, 1, ACS_HLINE, w - 2);
-  mvwaddch(pw, 2, w - 1, ACS_RTEE);
-  refresh();
-
-  post_menu(pm);
-  wrefresh(pw);
-
-  while ((c = wgetch(pw)) != '\n') {
-    switch (c) {
-      case KEY_DOWN:
-        menu_driver(pm, REQ_DOWN_ITEM);
-        places->c = item_index(current_item(pm));
-        break;
-      case KEY_UP:
-        menu_driver(pm, REQ_UP_ITEM);
-        places->c = item_index(current_item(pm));
-        break;
-    }
-
-    wrefresh(pw);
-  }
-
-  keypad(stdscr, TRUE);
-
-  unpost_menu(pm);
-  free_menu(pm);
-  for (i = 0; i < places->n; ++i) {
-    free_item(pi[i]);
-  }
-  free(pi);
-  delwin(pw);
-  refresh();
-
-  return 0;
-}
-
 struct observation_s {
   int ready;
   char phrase[50];
@@ -350,7 +171,7 @@ struct observation_s {
   char uv_description[50];
 };
 
-int fetch_observation(struct places_s *places,
+int fetch_observation(const char location[],
                       struct observation_s *observation) {
   int rc;
   struct buf_s b;
@@ -370,9 +191,9 @@ int fetch_observation(struct places_s *places,
   sprintf(url,
           "https://api.weather.com/v2/turbo/"
           "vt1observation?apiKey=d522aa97197fd864d36b418f39ebb323&"
-          "geocode=%f%%2C%f&units=m&language=en-AU&format="
+          "geocode=%s&units=m&language=en-AU&format="
           "json",
-          places->a[places->c].latitude, places->a[places->c].longitude);
+          location);
 
   if ((rc = fetch_json(url, &b)) != 0) {
     return rc;
@@ -504,7 +325,7 @@ struct forecast_s {
     }                                                                   \
   }
 
-int fetch_forecast(struct places_s *places, struct forecast_s *forecast) {
+int fetch_forecast(const char location[], struct forecast_s *forecast) {
   int i, rc, n;
   struct buf_s b;
   char url[250], data[1024 * 100];
@@ -520,9 +341,9 @@ int fetch_forecast(struct places_s *places, struct forecast_s *forecast) {
 
   sprintf(url,
           "https://api.weather.com/v2/turbo/"
-          "vt1dailyForecast?apiKey=d522aa97197fd864d36b418f39ebb323&geocode=%f%"
-          "%2C%f&units=m&language=en-AU&format=json",
-          places->a[places->c].latitude, places->a[places->c].longitude);
+          "vt1dailyForecast?apiKey=d522aa97197fd864d36b418f39ebb323&geocode=%s&"
+          "units=m&language=en-AU&format=json",
+          location);
 
   if ((rc = fetch_json(url, &b)) != 0) {
     return rc;
@@ -615,37 +436,74 @@ int fetch_forecast(struct places_s *places, struct forecast_s *forecast) {
   return 0;
 }
 
-void update_current(WINDOW *w, struct observation_s *observation) {
-  char str[40];
+void update_current(WINDOW *w, struct observation_s *observation, time_t t) {
+  char str[65];
+  struct tm lt;
+  time_t n;
+  int i;
+
+  n = time(NULL);
+
+  localtime_r(&n, &lt);
 
   wclear(w);
 
   if (observation->ready) {
-    mvwaddstr(w, 1, 0, ICON_PARTLYCLOUDY);
+    mvwaddstr(w, 1, 0, ICON_UNKNOWN);
 
-    snprintf(str, 40, "%s", observation->phrase);
+    for (i = 0; icons[i].phrase != NULL; i++) {
+      if (strncmp(observation->phrase, icons[i].phrase,
+                  sizeof(observation->phrase)) == 0) {
+        if (lt.tm_hour > 5 && lt.tm_hour < 19) {
+          mvwaddstr(w, 1, 0, icons[i].day);
+        } else {
+          mvwaddstr(w, 1, 0, icons[i].night);
+        }
+
+        break;
+      }
+    }
+
+    snprintf(str, sizeof(str), "%s", observation->phrase);
     mvwaddstr(w, 7, 2, str);
 
-    snprintf(str, 40, "Temp/feel: %dc/%dc", observation->temperature,
-             observation->feels_like);
+    strftime(str, sizeof(str), "     Time: %T", &lt);
     mvwaddstr(w, 9, 2, str);
 
-    snprintf(str, 40, "  Min/max: %dc/%dc", observation->temperature_min,
-             observation->temperature_max);
+    switch (t) {
+      case -1:
+        snprintf(str, sizeof(str), "  Updated: error");
+        break;
+      case 0:
+        snprintf(str, sizeof(str), "  Updated: updating");
+        break;
+      default:
+        localtime_r(&t, &lt);
+        strftime(str, sizeof(str), "  Updated: %T", &lt);
+        break;
+    }
     mvwaddstr(w, 10, 2, str);
 
-    snprintf(str, 40, " Humidity: %d%%", observation->humidity);
+    snprintf(str, sizeof(str), "Temp/feel: %dc/%dc", observation->temperature,
+             observation->feels_like);
     mvwaddstr(w, 11, 2, str);
 
-    snprintf(str, 40, "     Wind: %d %s", observation->wind_speed,
-             observation->wind_direction_compass);
+    snprintf(str, sizeof(str), "  Min/max: %dc/%dc",
+             observation->temperature_min, observation->temperature_max);
     mvwaddstr(w, 12, 2, str);
 
-    snprintf(str, 40, "Visbility: %.2fkm", observation->visibility);
+    snprintf(str, sizeof(str), " Humidity: %d%%", observation->humidity);
     mvwaddstr(w, 13, 2, str);
 
-    snprintf(str, 40, "  UV risk: %s", observation->uv_description);
+    snprintf(str, sizeof(str), "     Wind: %d %s", observation->wind_speed,
+             observation->wind_direction_compass);
     mvwaddstr(w, 14, 2, str);
+
+    snprintf(str, sizeof(str), "Visbility: %.2fkm", observation->visibility);
+    mvwaddstr(w, 15, 2, str);
+
+    snprintf(str, sizeof(str), "  UV risk: %s", observation->uv_description);
+    mvwaddstr(w, 16, 2, str);
 
     box(w, '|', '-');
     attron(COLOR_PAIR(2) | A_BOLD);
@@ -695,16 +553,54 @@ void update_forecast_day(WINDOW *w, struct forecast_s *forecast, int i) {
   wrefresh(w);
 }
 
-int main(void) {
+void usage() {
+  printf(
+      "Usage: cweather [options]\n"
+      "\n"
+      "Shows a weather forecast.\n"
+      "\n"
+      "options:\n"
+      "  -l <latitude,longitude> (required) specify the location\n");
+}
+
+int main(int argc, char **argv) {
   int i, c, rc;
-  struct places_s places;
+  char location[50], *s;
   struct observation_s observation;
   struct forecast_s forecast;
   WINDOW *mw, *cw, *fw, *dw[14];
+  fd_set rfds;
+  struct timeval tv;
+  time_t t;
 
-  memset(&places, 0, sizeof(places));
+  memset(location, 0, sizeof(location));
   memset(&observation, 0, sizeof(observation));
   memset(&forecast, 0, sizeof(forecast));
+
+  if ((s = getenv("LOCATION"))) {
+    strncpy(location, s, sizeof(location));
+  }
+
+  while ((c = getopt(argc, argv, "l:")) != -1) {
+    switch (c) {
+      case 'l':
+        strncpy(location, optarg, sizeof(location));
+        break;
+      case '?':
+        usage();
+        exit(0);
+        break;
+      default:
+        usage();
+        exit(1);
+        break;
+    }
+  }
+
+  if (strlen(location) == 0) {
+    usage();
+    exit(1);
+  }
 
   initscr();
   cbreak();
@@ -725,50 +621,55 @@ int main(void) {
     dw[i] = derwin(fw, 4, COLS - 28, i * 4, 1);
   }
 
-  if ((rc = configure_coords(&places)) != 0) {
-    exit(1);
-  }
-
-  if ((rc = fetch_observation(&places, &observation)) != 0) {
-    exit(1);
-  }
-  if ((rc = fetch_forecast(&places, &forecast)) != 0) {
-    exit(1);
-  }
-
-  update_current(cw, &observation);
-  update_forecast(fw);
-  for (i = 0; i < 14; i++) {
-    update_forecast_day(dw[i], &forecast, i);
-  }
-
-  refresh();
-
   keypad(stdscr, TRUE);
+  nodelay(stdscr, TRUE);
 
-  while ((c = getch()) != 'q') {
-    switch (c) {
-      case 'l':
-        if ((rc = configure_coords(&places)) != 0) {
-          exit(1);
-        }
+  while (1) {
+    if (t != 0) {
+      FD_ZERO(&rfds);
+      FD_SET(0, &rfds);
 
-        if ((rc = fetch_observation(&places, &observation)) != 0) {
-          exit(1);
-        }
-        if ((rc = fetch_forecast(&places, &forecast)) != 0) {
-          exit(1);
-        }
+      tv.tv_sec = 0;
+      tv.tv_usec = 500000;
 
-        keypad(stdscr, TRUE);
-
+      rc = select(1, &rfds, NULL, NULL, &tv);
+      if (rc == -1) {
+        perror("select()");
         break;
+      }
+
+      if (rc) {
+        switch ((c = wgetch(stdscr))) {
+          case 'q':
+            endwin();
+            return 0;
+          case 'r':
+            t = 0;
+            break;
+        }
+      }
     }
 
-    update_current(cw, &observation);
-    update_forecast(fw);
-    for (i = 0; i < 14; i++) {
-      update_forecast_day(dw[i], &forecast, i);
+    if ((time(NULL) - t) >= 60) {
+      update_current(cw, &observation, 0);
+
+      if ((rc = fetch_observation(location, &observation)) != 0) {
+        update_current(cw, &observation, -1);
+      }
+
+      if ((rc = fetch_forecast(location, &forecast)) != 0) {
+        update_current(cw, &observation, -1);
+      }
+
+      t = time(NULL);
+
+      update_current(cw, &observation, t);
+      update_forecast(fw);
+      for (i = 0; i < 14; i++) {
+        update_forecast_day(dw[i], &forecast, i);
+      }
+    } else {
+      update_current(cw, &observation, t);
     }
 
     refresh();

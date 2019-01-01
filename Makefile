@@ -1,5 +1,5 @@
 CFLAGS=-Werror -Wall
-LDLIBS=-lcurl -lmenu -lncurses -ljansson
+LDLIBS=-lcurl -lncurses -ljansson
 
 .PHONY: clean
 
