@@ -316,20 +316,21 @@ struct forecast_s {
     }                                                      \
   }
 
-#define READ_FORECAST_DAY_S_TIME(O, JN, FN)                             \
-  e = json_object_get(O, JN);                                           \
-  if (!e || !json_is_array(e)) {                                        \
-    fprintf(stderr, JN " was not an array\n");                          \
-    json_decref(r);                                                     \
-    return -1;                                                          \
-  }                                                                     \
-                                                                        \
-  n = json_array_size(e);                                               \
-                                                                        \
-  for (i = 0; i < MIN(n, 14); i++) {                                    \
-    if ((v = json_array_get(e, i)) && json_is_string(v)) {              \
-      strptime(json_string_value(v), "%FT%T%z", &forecast->days[i].FN); \
-    }                                                                   \
+#define READ_FORECAST_DAY_S_TIME(O, JN, FN)                       \
+  e = json_object_get(O, JN);                                     \
+  if (!e || !json_is_array(e)) {                                  \
+    fprintf(stderr, JN " was not an array\n");                    \
+    json_decref(r);                                               \
+    return -1;                                                    \
+  }                                                               \
+                                                                  \
+  n = json_array_size(e);                                         \
+                                                                  \
+  for (i = 0; i < MIN(n, 14); i++) {                              \
+    if ((v = json_array_get(e, i)) && json_is_string(v)) {        \
+      strptime(json_string_value(v), "%Y-%m-%dT%H:%M:%S%z",       \
+               &forecast->days[i].FN);                            \
+    }                                                             \
   }
 
 int fetch_forecast(const char location[], struct forecast_s *forecast) {
