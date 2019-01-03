@@ -26,9 +26,10 @@ file options read from `~/.cweather` (see
 
 The configurable values right now are your location, and the update interval.
 
-| Name | Default | Config File Option | Environment Variable | Argument |
-| Location | `-37.8136,144.9631` | location | LOCATION | -l |
-| Interval | `300` | interval | INTERVAL | -i |
+| Name     | Default             | Config File Option | Environment Variable | Argument |
+| -------- | ------------------- | ------------------ | -------------------- | -------- |
+| Location | `-37.8136,144.9631` | location           | LOCATION             | -l       |
+| Interval | `300`               | interval           | INTERVAL             | -i       |
 
 ## Running
 
