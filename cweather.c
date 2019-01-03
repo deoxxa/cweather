@@ -20,17 +20,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
 #include <curl/curl.h>
+#include <iniparser/iniparser.h>
 #include <jansson.h>
-#include <menu.h>
 #include <ncurses.h>
 
 #define MAX(a, b) ((a > b) ? a : b)
 #define MIN(a, b) ((a < b) ? a : b)
+
+#define CONFIG_FILE ".cweather"
+#define DEFAULT_LOCATION "-37.8136,144.9631"
+#define DEFAULT_INTERVAL 300
+#define MINIMUM_INTERVAL 60
 
 const char ICON_UNKNOWN[] =
     "      -----\n"
@@ -436,7 +443,8 @@ int fetch_forecast(const char location[], struct forecast_s *forecast) {
   return 0;
 }
 
-void update_current(WINDOW *w, struct observation_s *observation, time_t t) {
+void update_current(WINDOW *w, struct observation_s *observation, int interval,
+                    time_t t) {
   char str[65];
   struct tm lt;
   time_t n;
@@ -446,7 +454,7 @@ void update_current(WINDOW *w, struct observation_s *observation, time_t t) {
 
   localtime_r(&n, &lt);
 
-  wclear(w);
+  // wclear(w);
 
   if (observation->ready) {
     mvwaddstr(w, 1, 0, ICON_UNKNOWN);
@@ -484,26 +492,29 @@ void update_current(WINDOW *w, struct observation_s *observation, time_t t) {
     }
     mvwaddstr(w, 10, 2, str);
 
+    snprintf(str, sizeof(str), " Interval: %ds", interval);
+    mvwaddstr(w, 11, 2, str);
+
     snprintf(str, sizeof(str), "Temp/feel: %dc/%dc", observation->temperature,
              observation->feels_like);
-    mvwaddstr(w, 11, 2, str);
+    mvwaddstr(w, 12, 2, str);
 
     snprintf(str, sizeof(str), "  Min/max: %dc/%dc",
              observation->temperature_min, observation->temperature_max);
-    mvwaddstr(w, 12, 2, str);
+    mvwaddstr(w, 13, 2, str);
 
     snprintf(str, sizeof(str), " Humidity: %d%%", observation->humidity);
-    mvwaddstr(w, 13, 2, str);
+    mvwaddstr(w, 14, 2, str);
 
     snprintf(str, sizeof(str), "     Wind: %d %s", observation->wind_speed,
              observation->wind_direction_compass);
-    mvwaddstr(w, 14, 2, str);
-
-    snprintf(str, sizeof(str), "Visbility: %.2fkm", observation->visibility);
     mvwaddstr(w, 15, 2, str);
 
-    snprintf(str, sizeof(str), "  UV risk: %s", observation->uv_description);
+    snprintf(str, sizeof(str), "Visbility: %.2fkm", observation->visibility);
     mvwaddstr(w, 16, 2, str);
+
+    snprintf(str, sizeof(str), "  UV risk: %s", observation->uv_description);
+    mvwaddstr(w, 17, 2, str);
 
     box(w, '|', '-');
     attron(COLOR_PAIR(2) | A_BOLD);
@@ -560,12 +571,21 @@ void usage() {
       "Shows a weather forecast.\n"
       "\n"
       "options:\n"
-      "  -l <latitude,longitude> (required) specify the location\n");
+      "  -l <latitude,longitude> specify the location\n"
+      "  -i <seconds> specify the interval for updates (default %d, minimum "
+      "%d)\n",
+      DEFAULT_INTERVAL, MINIMUM_INTERVAL);
 }
 
 int main(int argc, char **argv) {
   int i, c, rc;
-  char location[50], *s;
+  char location[50], *s, path[100];
+  int interval;
+  size_t path_len;
+  struct stat st;
+  dictionary *cfg;
+  const char *cfg_s;
+  int cfg_i;
   struct observation_s observation;
   struct forecast_s forecast;
   WINDOW *mw, *cw, *fw, *dw[14];
@@ -577,14 +597,47 @@ int main(int argc, char **argv) {
   memset(&observation, 0, sizeof(observation));
   memset(&forecast, 0, sizeof(forecast));
 
-  if ((s = getenv("LOCATION"))) {
-    strncpy(location, s, sizeof(location));
+  strncpy(location, DEFAULT_LOCATION, sizeof(location));
+  interval = DEFAULT_INTERVAL;
+
+  memset(path, 0, sizeof(path));
+
+  if ((s = getenv("HOME")) != NULL && (path_len = strlen(s)) > 0 &&
+      path_len + 1 + strlen(CONFIG_FILE) < sizeof(path)) {
+    strncat(path, s, sizeof(path));
+    path[path_len] = '/';
+    strncat(&(path[path_len + 1]), CONFIG_FILE, sizeof(path) - (path_len + 1));
+
+    if ((rc = stat(path, &st)) == 0) {
+      if ((cfg = iniparser_load(path)) != NULL) {
+        if ((cfg_s = iniparser_getstring(cfg, "cweather:location", "")) !=
+            NULL) {
+          strncpy(location, cfg_s, sizeof(location));
+        }
+
+        if ((cfg_i = iniparser_getint(cfg, "cweather:interval", 0)) != 0) {
+          interval = cfg_i;
+        }
+
+        iniparser_freedict(cfg);
+      }
+    }
   }
 
-  while ((c = getopt(argc, argv, "l:")) != -1) {
+  if ((s = getenv("LOCATION")) != NULL && strlen(s) > 0) {
+    strncpy(location, s, sizeof(location));
+  }
+  if ((s = getenv("INTERVAL")) != NULL && strlen(s) > 0) {
+    interval = atoi(s);
+  }
+
+  while ((c = getopt(argc, argv, "l:i:")) != -1) {
     switch (c) {
       case 'l':
         strncpy(location, optarg, sizeof(location));
+        break;
+      case 'i':
+        interval = atoi(optarg);
         break;
       case '?':
         usage();
@@ -598,6 +651,13 @@ int main(int argc, char **argv) {
   }
 
   if (strlen(location) == 0) {
+    printf("Error: location not specified\n\n");
+    usage();
+    exit(1);
+  }
+
+  if (interval < MINIMUM_INTERVAL) {
+    printf("Error: interval must be at least %d\n\n", MINIMUM_INTERVAL);
     usage();
     exit(1);
   }
@@ -643,33 +703,33 @@ int main(int argc, char **argv) {
           case 'q':
             endwin();
             return 0;
-          case 'r':
+          case 'u':
             t = 0;
             break;
         }
       }
     }
 
-    if ((time(NULL) - t) >= 60) {
-      update_current(cw, &observation, 0);
+    if ((time(NULL) - t) >= interval) {
+      update_current(cw, &observation, interval, 0);
 
       if ((rc = fetch_observation(location, &observation)) != 0) {
-        update_current(cw, &observation, -1);
+        update_current(cw, &observation, interval, -1);
       }
 
       if ((rc = fetch_forecast(location, &forecast)) != 0) {
-        update_current(cw, &observation, -1);
+        update_current(cw, &observation, interval, -1);
       }
 
       t = time(NULL);
 
-      update_current(cw, &observation, t);
+      update_current(cw, &observation, interval, t);
       update_forecast(fw);
       for (i = 0; i < 14; i++) {
         update_forecast_day(dw[i], &forecast, i);
       }
     } else {
-      update_current(cw, &observation, t);
+      update_current(cw, &observation, interval, t);
     }
 
     refresh();

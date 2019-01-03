@@ -1,5 +1,5 @@
 CFLAGS=-Werror -Wall
-LDLIBS=-lcurl -lncurses -ljansson
+LDLIBS=-lcurl -liniparser -lncurses -ljansson
 
 ifeq ($(PREFIX),)
   PREFIX:=/usr/local

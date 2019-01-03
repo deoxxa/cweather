@@ -1,0 +1,3 @@
+[cweather]
+location = -37.8136,144.9631 ; Melbourne, Australia
+interval = 300
