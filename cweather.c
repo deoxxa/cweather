@@ -537,7 +537,7 @@ void update_forecast(WINDOW *w) {
 
 void update_forecast_day(WINDOW *w, struct forecast_s *forecast, int i) {
   int x;
-  char str[40], d[20], sunrise[15], sunset[15], moonrise[15], moonset[15];
+  char str[100], d[20], sunrise[15], sunset[15], moonrise[15], moonset[15];
 
   x = getmaxx(w);
 
@@ -547,7 +547,7 @@ void update_forecast_day(WINDOW *w, struct forecast_s *forecast, int i) {
 
   attron(COLOR_PAIR(2) | A_BOLD);
   strftime(d, 20, "%b %e, %A", &forecast->days[i].valid_date);
-  snprintf(str, 40, " %s, %s ", d, forecast->days[i].moon_phrase);
+  snprintf(str, sizeof(str), " %s, %s ", d, forecast->days[i].moon_phrase);
   mvwaddstr(w, 0, 2, str);
   attroff(COLOR_PAIR(2) | A_BOLD);
 
@@ -555,8 +555,8 @@ void update_forecast_day(WINDOW *w, struct forecast_s *forecast, int i) {
   strftime(sunset, 15, "%R", &forecast->days[i].sunset);
   strftime(moonrise, 15, "%R", &forecast->days[i].moonrise);
   strftime(moonset, 15, "%R", &forecast->days[i].moonset);
-  snprintf(str, 40, "Sun/moon: %s-%s, %s-%s", sunrise, sunset, moonrise,
-           moonset);
+  snprintf(str, sizeof(str), "Sun/moon: %s-%s, %s-%s", sunrise, sunset,
+           moonrise, moonset);
   mvwaddstr(w, 1, 0, str);
 
   mvwaddstr(w, 2, 0, forecast->days[i].day.narrative);
