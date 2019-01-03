@@ -27,7 +27,7 @@
 #include <unistd.h>
 
 #include <curl/curl.h>
-#include <iniparser/iniparser.h>
+#include <iniparser.h>
 #include <jansson.h>
 #include <ncurses.h>
 

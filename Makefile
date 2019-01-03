@@ -1,4 +1,4 @@
-CFLAGS=-Werror -Wall
+CFLAGS+=-Werror -Wall
 LDLIBS=-lcurl -liniparser -lncurses -ljansson
 
 ifeq ($(PREFIX),)

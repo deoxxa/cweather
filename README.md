@@ -15,7 +15,9 @@ open. If anyone else feels like making it do more stuff, go nuts.
 
 You'll need ncurses, libcurl, iniparser, and jansson installed. If that's the
 case, you should just be able to run `make` and end up with a binary called
-`cweather`.
+`cweather`. If you're running debian or a derivative, you might have to define
+`CFLAGS=-I/usr/include/iniparser`, as debian packages iniparser's headers a
+little strangely.
 
 ## Configuration
 
